@@ -1,6 +1,5 @@
 """Scrape NCCN guideline category pages for complete version tracking."""
 
-import json
 import re
 import asyncio
 import logging
@@ -10,7 +9,7 @@ from pathlib import Path
 import httpx
 import yaml
 from bs4 import BeautifulSoup
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +319,6 @@ async def _crawl_detail_pages(guidelines: list[GuidelineInfo]) -> list[PdfIndexE
     """
     semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
     entries: list[PdfIndexEntry] = []
-    failed: list[str] = []
 
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30) as client:
 

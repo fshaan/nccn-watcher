@@ -8,8 +8,8 @@ import yaml
 from mcp.server.fastmcp import FastMCP
 
 from .scraper import (
-    fetch_all_guidelines, fetch_recently_published, fetch_pdf_index,
-    slugify, ScrapeError, PdfIndexEntry,
+    fetch_all_guidelines, fetch_pdf_index,
+    slugify, ScrapeError,
 )
 from .state import StateManager
 from .downloader import NCCNDownloader, get_archived_versions

@@ -1,14 +1,11 @@
 # TODOS
 
-## Enhancement: NCCN 指南索引缓存
-- **Priority**: Medium
-- **Status**: Partially addressed
-- **What**: 爬取 NCCN 4 个 category 页面生成完整指南列表，用户可从列表中选择要监控的瘤种
-- **Why**: 避免用户手动输入瘤种名称时拼写错误导致监控失败
-- **Reuse**: NCCN_guidelines_MCP 的 `nccn_get_index.py` 已实现类似功能
-- **Depends on**: 无，可独立实现
+## Enhancement: 多类型 PDF 下载
+- **Priority**: Low
+- **Status**: Planned
+- **What**: 支持下载 detail 页面上的其他 PDF 类型（Evidence Blocks、Frameworks、翻译版、患者指南）
+- **Why**: 目前只下载主指南 PDF，但 detail 页面有 5-6 种 PDF 可下载
 - **Added**: 2026-03-20 by /plan-eng-review
-- **Note**: browse_guidelines + find_guideline MCP tools 已部分解决此需求（中英文搜索+分类浏览）。剩余工作：将 NCCN 爬取结果与 guideline_names.py 的静态映射同步
 
 ## Vision: 多指南体系支持（ESMO、CSCO、ASCO）
 - **Priority**: Low (v2+)
@@ -18,3 +15,10 @@
 - **Risk**: 每个指南体系网站结构不同，需单独开发爬虫
 - **Depends on**: MVP 在 NCCN 上验证模式成功后
 - **Added**: 2026-03-20 by /plan-eng-review
+
+## Completed
+
+### NCCN 指南索引缓存
+- **Completed**: v1.2 (2026-03-20)
+- **What**: 爬取 NCCN 92 个 detail 页面构建完整 PDF URL 索引（7 天 YAML 缓存），用户可通过 `download_guideline` 按名搜索并下载任意指南
+- **Resolved by**: `fetch_pdf_index()` + `browse_guidelines` + `find_guideline` + `download_guideline` MCP tools

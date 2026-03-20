@@ -70,6 +70,8 @@ python tests/integration_test.py
 | `find_guideline` | Fuzzy search by Chinese name, English name, or abbreviation |
 | `update_watch_list` | Add/remove/set monitored guidelines via natural language |
 | `browse_guidelines` | Browse all guidelines organized by category |
+| `download_guideline` | Download a specific guideline PDF by name (Chinese/English), archive it |
+| `get_guideline_history` | View version history and change timeline for a guideline |
 
 ## OpenClaw Integration
 
