@@ -7,9 +7,12 @@ from pathlib import Path
 import yaml
 from mcp.server.fastmcp import FastMCP
 
-from .scraper import fetch_all_guidelines, fetch_recently_published, ScrapeError
+from .scraper import (
+    fetch_all_guidelines, fetch_recently_published, fetch_pdf_index,
+    slugify, ScrapeError, PdfIndexEntry,
+)
 from .state import StateManager
-from .downloader import NCCNDownloader
+from .downloader import NCCNDownloader, get_archived_versions
 from .analyzer import extract_update_notes, build_summary_prompt
 from .health import HealthTracker
 from .guideline_names import search_guidelines, get_zh_name, GUIDELINE_ZH
@@ -103,34 +106,30 @@ async def check_updates() -> str:
                 f"Last check: {state_mgr.last_check}"
             )
 
-        # Step 3: Get PDF URLs from Recently Published page
-        # Category pages only have detail URLs, not PDF URLs.
-        # Recently Published page has PDF links for recently updated guidelines.
-        pdf_url_map: dict[str, str] = {}
-        try:
-            recent = await fetch_recently_published()
-            pdf_url_map = {g.name: g.detail_url for g in recent}
-        except ScrapeError:
-            logger.warning("Could not fetch Recently Published page for PDF URLs")
+        # Step 3: Get PDF URLs from index (crawls detail pages if needed)
+        index = await fetch_pdf_index(current)
+        pdf_url_map = {e.name: e for e in index}
 
-        # Step 4: For each change, try to download PDF and extract notes
+        # Step 4: For each change, archive + download PDF + extract notes
         report_parts: list[str] = []
         report_parts.append(f"# NCCN Guideline Updates Detected ({len(changes)})\n")
 
         for change in changes:
-            pdf_url = pdf_url_map.get(change.name, "")
+            entry = pdf_url_map.get(change.name)
             section = [
-                f"## {change.name}",
+                f"## {change.name} ({get_zh_name(change.name)})",
                 f"**Version**: {change.old_version} → {change.new_version}",
                 f"**Category**: {change.category}",
                 f"**Detail**: {change.detail_url}",
             ]
-            if pdf_url:
-                section.append(f"**PDF**: {pdf_url}")
+            if entry:
+                section.append(f"**PDF**: {entry.pdf_url}")
 
-            # Try PDF download + analysis if credentials available
-            if analysis_cfg.get("enabled", True) and nccn_user and pdf_url:
-                pdf_path = await downloader.download_pdf(pdf_url, cache_dir)
+            # Try PDF download + archive + analysis if credentials available
+            if analysis_cfg.get("enabled", True) and nccn_user and entry:
+                pdf_path = await downloader.download_and_archive(
+                    entry.pdf_url, entry.slug, change.new_version,
+                )
                 if pdf_path:
                     notes = extract_update_notes(pdf_path, max_pages)
                     if notes:
@@ -147,9 +146,9 @@ async def check_updates() -> str:
                         section.append("\n*Could not extract update notes from PDF.*")
                 else:
                     section.append("\n*PDF download failed. Check NCCN credentials.*")
-            elif not pdf_url:
+            elif not entry:
                 section.append(
-                    "\n*PDF URL not found on Recently Published page. "
+                    "\n*PDF URL not found in index. "
                     "Visit the detail page to download manually.*"
                 )
             else:
@@ -333,6 +332,106 @@ async def browse_guidelines() -> str:
             zh_name = info["zh"]
             watched = " ✅" if en_name.lower() in watch_set else ""
             lines.append(f"- {en_name} ({zh_name}){watched}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def download_guideline(query: str) -> str:
+    """Download a specific NCCN guideline PDF by name.
+
+    Searches by Chinese or English name (fuzzy matching), downloads the
+    PDF via NCCN login, archives it, and extracts update notes.
+
+    Args:
+        query: Guideline name in Chinese, English, or abbreviation.
+               Examples: "胃癌", "GIST", "Breast Cancer"
+
+    Returns a summary with the PDF path and extracted update notes.
+    """
+    # Step 1: Resolve guideline name
+    matches = search_guidelines(query)
+    if not matches:
+        return f"No guideline found matching '{query}'. Use find_guideline to search."
+
+    en_name, zh_name, score = matches[0]
+    if score < 0.4:
+        return f"No confident match for '{query}'. Best guess: {en_name} ({zh_name}). Use find_guideline to search."
+
+    # Step 2: Get PDF URL from index
+    guidelines = await fetch_all_guidelines()
+    index = await fetch_pdf_index(guidelines)
+    entry = next((e for e in index if e.name == en_name), None)
+
+    if not entry:
+        return f"PDF URL not found for '{en_name}'. The index may be incomplete."
+
+    if not nccn_user:
+        return (
+            f"Found: **{en_name}** ({zh_name}) — Version {entry.version}\n"
+            f"PDF URL: {entry.pdf_url}\n\n"
+            f"*Cannot download — NCCN credentials not configured.*"
+        )
+
+    # Step 3: Download and archive
+    pdf_path = await downloader.download_and_archive(
+        entry.pdf_url, entry.slug, entry.version,
+    )
+    if not pdf_path:
+        return f"Download failed for {en_name}. Check NCCN credentials."
+
+    # Step 4: Extract update notes
+    analysis_cfg = config.get("analysis", {})
+    max_pages = analysis_cfg.get("update_notes_pages", 5)
+    notes = extract_update_notes(pdf_path, max_pages)
+
+    lines = [
+        f"# {en_name} ({zh_name})",
+        f"**Version**: {entry.version}",
+        f"**PDF**: {pdf_path}",
+        f"**Size**: {pdf_path.stat().st_size / (1024*1024):.1f} MB",
+    ]
+    if notes:
+        lines.append(f"\n## Update Notes (first {max_pages} pages)\n```\n{notes[:3000]}\n```")
+    else:
+        lines.append("\n*No update notes extracted.*")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def get_guideline_history(query: str) -> str:
+    """View the version history and change timeline for a specific guideline.
+
+    Shows all archived versions with download dates and file sizes.
+
+    Args:
+        query: Guideline name in Chinese, English, or abbreviation.
+    """
+    matches = search_guidelines(query)
+    if not matches:
+        return f"No guideline found matching '{query}'."
+
+    en_name, zh_name, score = matches[0]
+    slug = slugify(en_name)
+
+    versions = get_archived_versions(slug)
+    if not versions:
+        return (
+            f"No archived versions for **{en_name}** ({zh_name}).\n\n"
+            f"Use `download_guideline(\"{query}\")` to download the current version."
+        )
+
+    lines = [
+        f"# {en_name} ({zh_name}) — Version History",
+        f"**{len(versions)} archived version(s)**\n",
+    ]
+
+    for v in versions:
+        version = v.get("version", "?")
+        date = v.get("downloaded_at", "?")[:10]
+        size_mb = v.get("size_bytes", 0) / (1024 * 1024)
+        lines.append(f"- **v{version}** — archived {date} ({size_mb:.1f} MB)")
 
     return "\n".join(lines)
 

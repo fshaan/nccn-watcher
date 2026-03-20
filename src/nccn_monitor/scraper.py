@@ -1,11 +1,16 @@
 """Scrape NCCN guideline category pages for complete version tracking."""
 
+import json
 import re
 import asyncio
 import logging
+from datetime import datetime
+from pathlib import Path
+
 import httpx
+import yaml
 from bs4 import BeautifulSoup
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +215,184 @@ def parse_recently_published(html: str) -> list[GuidelineInfo]:
         raise ScrapeError("No guidelines found on Recently Published page")
 
     return results
+
+
+# ── PDF Index: detail page crawling for PDF URLs ─────────────────
+
+PDF_INDEX_MAX_AGE_DAYS = 7
+CONCURRENT_LIMIT = 5
+
+
+def slugify(name: str) -> str:
+    """Convert a guideline name to a filesystem-safe slug.
+
+    Examples:
+        "Non-Small Cell Lung Cancer" → "non-small-cell-lung-cancer"
+        "Melanoma: Uveal" → "melanoma-uveal"
+        "Ovarian Cancer/Fallopian Tube Cancer/Primary Peritoneal Cancer"
+            → "ovarian-cancer-fallopian-tube-cancer-primary-peritoneal-cancer"
+    """
+    slug = name.lower()
+    slug = re.sub(r"[/:()]+", " ", slug)   # Replace special chars with space
+    slug = re.sub(r"[^\w\s-]", "", slug)   # Remove remaining non-alphanumeric
+    slug = re.sub(r"[\s_]+", "-", slug)    # Spaces/underscores to hyphens
+    slug = slug.strip("-")
+    return slug
+
+
+@dataclass
+class PdfIndexEntry:
+    """A guideline's PDF URL discovered from its detail page."""
+
+    name: str
+    slug: str
+    pdf_url: str
+    version: str = ""
+    detail_url: str = ""
+    category: str = ""
+
+
+async def fetch_pdf_index(
+    guidelines: list[GuidelineInfo],
+    index_file: str | Path = "~/.nccn-monitor/index.yaml",
+) -> list[PdfIndexEntry]:
+    """Build a complete name→PDF URL index by crawling detail pages.
+
+    Crawls each guideline's detail page to find the main PDF download link.
+    Uses a cached index file (YAML, 7-day TTL) to avoid repeated crawling.
+
+    Args:
+        guidelines: List of guidelines from fetch_all_guidelines().
+        index_file: Path to the cached index file.
+
+    Returns:
+        List of PdfIndexEntry with PDF URLs for all discoverable guidelines.
+    """
+    path = Path(index_file).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Check cache
+    if path.exists():
+        try:
+            with open(path) as f:
+                cached = yaml.safe_load(f)
+            if cached and "created_at" in cached:
+                age = (datetime.now() - datetime.fromisoformat(cached["created_at"])).days
+                if age < PDF_INDEX_MAX_AGE_DAYS:
+                    entries = [PdfIndexEntry(**e) for e in cached.get("entries", [])]
+                    logger.info("Using cached PDF index (%d entries, %d days old)", len(entries), age)
+                    return entries
+                logger.info("PDF index cache expired (%d days), rebuilding", age)
+        except Exception as e:
+            logger.warning("Could not read PDF index cache: %s", e)
+
+    # Build index by crawling detail pages
+    entries = await _crawl_detail_pages(guidelines)
+
+    # Save cache
+    cache_data = {
+        "created_at": datetime.now().isoformat(),
+        "entry_count": len(entries),
+        "entries": [
+            {
+                "name": e.name,
+                "slug": e.slug,
+                "pdf_url": e.pdf_url,
+                "version": e.version,
+                "detail_url": e.detail_url,
+                "category": e.category,
+            }
+            for e in entries
+        ],
+    }
+    with open(path, "w") as f:
+        yaml.dump(cache_data, f, default_flow_style=False, allow_unicode=True)
+    logger.info("PDF index built and cached: %d entries → %s", len(entries), path)
+
+    return entries
+
+
+async def _crawl_detail_pages(guidelines: list[GuidelineInfo]) -> list[PdfIndexEntry]:
+    """Crawl all detail pages concurrently to extract PDF URLs.
+
+    Uses asyncio.Semaphore to limit concurrency to CONCURRENT_LIMIT,
+    with a small delay between requests to be polite to NCCN servers.
+    """
+    semaphore = asyncio.Semaphore(CONCURRENT_LIMIT)
+    entries: list[PdfIndexEntry] = []
+    failed: list[str] = []
+
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30) as client:
+
+        async def crawl_one(guideline: GuidelineInfo) -> PdfIndexEntry | None:
+            async with semaphore:
+                try:
+                    resp = await client.get(guideline.detail_url)
+                    resp.raise_for_status()
+                    pdf_url = parse_detail_page_for_pdf(resp.text)
+                    if pdf_url:
+                        return PdfIndexEntry(
+                            name=guideline.name,
+                            slug=slugify(guideline.name),
+                            pdf_url=pdf_url,
+                            version=guideline.version,
+                            detail_url=guideline.detail_url,
+                            category=guideline.category,
+                        )
+                    else:
+                        logger.warning("No PDF link found on detail page for: %s", guideline.name)
+                        return None
+                except Exception as e:
+                    logger.warning("Failed to crawl detail page for %s: %s", guideline.name, e)
+                    return None
+                finally:
+                    await asyncio.sleep(0.5)  # Rate limit between requests
+
+        tasks = [crawl_one(g) for g in guidelines]
+        results = await asyncio.gather(*tasks)
+
+    for r in results:
+        if r:
+            entries.append(r)
+
+    logger.info("PDF index: %d/%d guidelines have PDF URLs", len(entries), len(guidelines))
+    return entries
+
+
+def parse_detail_page_for_pdf(html: str) -> str | None:
+    """Extract the main guideline PDF URL from a detail page.
+
+    The detail page structure (as of 2026-03):
+      <h4 class="GL">Guidelines</h4>
+      <ul class="pdfList">
+        <li><p><a href="/professionals/physician_gls/pdf/xxx.pdf">NCCN Guidelines</a>
+            <span> Version X.YYYY</span></p></li>
+      </ul>
+
+    Returns the absolute PDF URL, or None if not found.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Strategy 1: Find <h4 class="GL"> section's PDF list
+    gl_header = soup.find("h4", class_="GL")
+    if gl_header:
+        # Look for the next pdfList after this header
+        pdf_list = gl_header.find_next("ul", class_="pdfList")
+        if pdf_list:
+            link = pdf_list.find("a", href=lambda h: h and ".pdf" in h)
+            if link:
+                href = link["href"]
+                return href if href.startswith("http") else NCCN_BASE + href
+
+    # Strategy 2: Fallback — find any professional guideline PDF link
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if "/professionals/physician_gls/pdf/" in href and href.endswith(".pdf"):
+            # Skip Evidence Blocks and Frameworks
+            if "_blocks" not in href and "_core" not in href and "_basic" not in href and "_enhanced" not in href:
+                return href if href.startswith("http") else NCCN_BASE + href
+
+    return None
 
 
 class ScrapeError(Exception):

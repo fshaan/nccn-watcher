@@ -5,8 +5,11 @@ from pathlib import Path
 from nccn_monitor.scraper import (
     parse_category_page,
     parse_recently_published,
+    parse_detail_page_for_pdf,
+    slugify,
     ScrapeError,
 )
+from nccn_monitor.guideline_names import GUIDELINE_ZH
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -106,3 +109,62 @@ def test_parse_empty_html_raises_scrape_error():
         assert False, "Should have raised ScrapeError"
     except ScrapeError:
         pass
+
+
+# ── Detail page PDF extraction tests ─────────────────────────────
+
+
+def test_parse_detail_page_extracts_main_pdf():
+    html = (FIXTURES / "detail_page.html").read_text()
+    pdf_url = parse_detail_page_for_pdf(html)
+
+    assert pdf_url == "https://www.nccn.org/professionals/physician_gls/pdf/gastric.pdf"
+
+
+def test_parse_detail_page_skips_blocks_and_patient():
+    """Should return the main guideline PDF, not Evidence Blocks or patient PDF."""
+    html = (FIXTURES / "detail_page.html").read_text()
+    pdf_url = parse_detail_page_for_pdf(html)
+
+    assert "blocks" not in pdf_url
+    assert "patient" not in pdf_url
+
+
+def test_parse_detail_page_no_pdf():
+    html = "<html><body><h4 class='GL'>Guidelines</h4><ul class='pdfList'></ul></body></html>"
+    pdf_url = parse_detail_page_for_pdf(html)
+    assert pdf_url is None
+
+
+# ── Slugify tests ────────────────────────────────────────────────
+
+
+def test_slugify_basic():
+    assert slugify("Breast Cancer") == "breast-cancer"
+
+
+def test_slugify_colon():
+    assert slugify("Melanoma: Uveal") == "melanoma-uveal"
+
+
+def test_slugify_slash():
+    result = slugify("Ovarian Cancer/Fallopian Tube Cancer/Primary Peritoneal Cancer")
+    assert result == "ovarian-cancer-fallopian-tube-cancer-primary-peritoneal-cancer"
+
+
+def test_slugify_parentheses():
+    assert slugify("Wilms Tumor (Nephroblastoma)") == "wilms-tumor-nephroblastoma"
+
+
+def test_slugify_special_chars():
+    result = slugify("Waldenström Macroglobulinemia/Lymphoplasmacytic Lymphoma")
+    assert "/" not in result
+    assert " " not in result
+
+
+def test_slugify_all_92_guidelines_unique():
+    """CRITICAL: All 92 guideline names must produce unique slugs."""
+    slugs = [slugify(name) for name in GUIDELINE_ZH.keys()]
+    assert len(slugs) == len(set(slugs)), (
+        f"Duplicate slugs found! {len(slugs)} names → {len(set(slugs))} unique slugs"
+    )

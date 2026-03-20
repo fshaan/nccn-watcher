@@ -1,9 +1,11 @@
-"""NCCN login and PDF download — adapted from gscfwid/NCCN_guidelines_MCP."""
+"""NCCN login and PDF download + version archiving."""
 
 import asyncio
+import json
 import os
 import logging
-from datetime import datetime
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -160,8 +162,91 @@ class NCCNDownloader:
             logger.error("Download error for %s: %s", pdf_url, e)
             return None
 
+    async def download_and_archive(
+        self,
+        pdf_url: str,
+        slug: str,
+        version: str,
+        archive_dir: str | Path = "~/.nccn-monitor/archive",
+    ) -> Path | None:
+        """Download a PDF and store it in the versioned archive.
+
+        Archive structure:
+            archive/{slug}/v{version}/guideline.pdf
+            archive/{slug}/v{version}/meta.json
+
+        Returns the archived PDF path on success, None on failure.
+        """
+        archive_path = Path(archive_dir).expanduser() / slug / f"v{version}"
+        pdf_path = archive_path / "guideline.pdf"
+
+        # Already archived?
+        if pdf_path.exists() and pdf_path.stat().st_size > 0:
+            logger.info("Already archived: %s v%s", slug, version)
+            return pdf_path
+
+        # Download to temp cache first, then move to archive
+        temp_dir = Path(archive_dir).expanduser() / ".tmp"
+        downloaded = await self.download_pdf(pdf_url, temp_dir, max_age_days=0)
+        if not downloaded:
+            return None
+
+        # Move to archive
+        archive_path.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(downloaded), str(pdf_path))
+
+        # Write metadata
+        meta = {
+            "version": version,
+            "slug": slug,
+            "pdf_url": pdf_url,
+            "downloaded_at": datetime.now(timezone.utc).isoformat(),
+            "size_bytes": pdf_path.stat().st_size,
+        }
+        meta_path = archive_path / "meta.json"
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        logger.info("Archived: %s v%s (%d bytes)", slug, version, meta["size_bytes"])
+        return pdf_path
+
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, *args):
         await self.close()
+
+
+# ── Archive utilities ────────────────────────────────────────────
+
+
+def get_archived_versions(
+    slug: str, archive_dir: str | Path = "~/.nccn-monitor/archive"
+) -> list[dict]:
+    """List all archived versions for a guideline, newest first.
+
+    Returns list of dicts with version, downloaded_at, size_bytes, path.
+    """
+    archive_path = Path(archive_dir).expanduser() / slug
+    if not archive_path.exists():
+        return []
+
+    versions = []
+    for version_dir in sorted(archive_path.iterdir(), reverse=True):
+        if not version_dir.is_dir() or version_dir.name.startswith("."):
+            continue
+        meta_path = version_dir / "meta.json"
+        pdf_path = version_dir / "guideline.pdf"
+        if meta_path.exists():
+            with open(meta_path) as f:
+                meta = json.load(f)
+            meta["pdf_path"] = str(pdf_path)
+            versions.append(meta)
+        elif pdf_path.exists():
+            versions.append({
+                "version": version_dir.name.lstrip("v"),
+                "pdf_path": str(pdf_path),
+                "size_bytes": pdf_path.stat().st_size,
+            })
+
+    return versions
