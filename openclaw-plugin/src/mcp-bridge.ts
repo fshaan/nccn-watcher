@@ -66,7 +66,7 @@ export class McpBridge {
       capabilities: {},
       clientInfo: { name: "openclaw-nccn-monitor", version: "0.1.0" },
     });
-    await this.send("notifications/initialized", {});
+    this.notify("notifications/initialized", {});
     this.initialized = true;
   }
 
@@ -91,6 +91,13 @@ export class McpBridge {
       this.process.kill();
       this.process = null;
     }
+  }
+
+  /** Fire-and-forget notification (no response expected per MCP spec). */
+  private notify(method: string, params?: Record<string, unknown>): void {
+    if (!this.process?.stdin) return;
+    const msg = { jsonrpc: "2.0", method, ...(params ? { params } : {}) };
+    this.process.stdin.write(JSON.stringify(msg) + "\n");
   }
 
   private send(method: string, params?: Record<string, unknown>): Promise<unknown> {

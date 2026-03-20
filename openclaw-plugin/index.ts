@@ -19,7 +19,7 @@ import {
 } from "./src/tools.js";
 
 // Default paths — can be overridden via plugin config
-const DEFAULT_PROJECT_DIR = join(process.env.HOME ?? "", "Workspace/Claude/nccn_watcher");
+const DEFAULT_PROJECT_DIR = join(process.env.HOME ?? "", "Workspace/Claude/nccn_monitor");
 const DEFAULT_PYTHON_PATH = join(DEFAULT_PROJECT_DIR, ".venv/bin/python");
 
 const nccnMonitorPlugin = {
