@@ -35,5 +35,10 @@ analysis:
 # State file location
 state_file: "~/.nccn-monitor/state.json"
 
-# PDF cache directory
+# PDF cache directory (temporary downloads)
 cache_dir: "~/.nccn-monitor/cache"
+
+# PDF archive directory (versioned guideline storage)
+# Downloaded PDFs are renamed to: NCCN_<CamelCase>_<Year>.V<Num>_EN.pdf
+# Example: NCCN_GastricCancer_2026.V2_EN.pdf
+archive_dir: "~/.nccn-monitor/archive"

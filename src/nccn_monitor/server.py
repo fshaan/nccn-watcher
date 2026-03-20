@@ -53,6 +53,7 @@ def load_config() -> dict:
         },
         "state_file": "~/.nccn-monitor/state.json",
         "cache_dir": "~/.nccn-monitor/cache",
+        "archive_dir": "~/.nccn-monitor/archive",
     }
 
 
@@ -129,6 +130,8 @@ async def check_updates() -> str:
             if analysis_cfg.get("enabled", True) and nccn_user and entry:
                 pdf_path = await downloader.download_and_archive(
                     entry.pdf_url, entry.slug, change.new_version,
+                    name=change.name,
+                    archive_dir=config.get("archive_dir", "~/.nccn-monitor/archive"),
                 )
                 if pdf_path:
                     notes = extract_update_notes(pdf_path, max_pages)
@@ -373,9 +376,11 @@ async def download_guideline(query: str) -> str:
             f"*Cannot download — NCCN credentials not configured.*"
         )
 
-    # Step 3: Download and archive
+    # Step 3: Download and archive with standardized filename
     pdf_path = await downloader.download_and_archive(
         entry.pdf_url, entry.slug, entry.version,
+        name=en_name,
+        archive_dir=config.get("archive_dir", "~/.nccn-monitor/archive"),
     )
     if not pdf_path:
         return f"Download failed for {en_name}. Check NCCN credentials."
@@ -415,7 +420,8 @@ async def get_guideline_history(query: str) -> str:
     en_name, zh_name, score = matches[0]
     slug = slugify(en_name)
 
-    versions = get_archived_versions(slug)
+    archive_dir = config.get("archive_dir", "~/.nccn-monitor/archive")
+    versions = get_archived_versions(slug, archive_dir=archive_dir)
     if not versions:
         return (
             f"No archived versions for **{en_name}** ({zh_name}).\n\n"
@@ -431,7 +437,8 @@ async def get_guideline_history(query: str) -> str:
         version = v.get("version", "?")
         date = v.get("downloaded_at", "?")[:10]
         size_mb = v.get("size_bytes", 0) / (1024 * 1024)
-        lines.append(f"- **v{version}** — archived {date} ({size_mb:.1f} MB)")
+        fname = v.get("filename", "guideline.pdf")
+        lines.append(f"- **v{version}** — {fname} — archived {date} ({size_mb:.1f} MB)")
 
     return "\n".join(lines)
 

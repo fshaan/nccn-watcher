@@ -7,6 +7,7 @@ from nccn_monitor.scraper import (
     parse_recently_published,
     parse_detail_page_for_pdf,
     slugify,
+    format_pdf_filename,
     ScrapeError,
 )
 from nccn_monitor.guideline_names import GUIDELINE_ZH
@@ -168,3 +169,32 @@ def test_slugify_all_92_guidelines_unique():
     assert len(slugs) == len(set(slugs)), (
         f"Duplicate slugs found! {len(slugs)} names → {len(set(slugs))} unique slugs"
     )
+
+
+# ── PDF filename format tests ────────────────────────────────────
+
+
+def test_format_pdf_filename_basic():
+    assert format_pdf_filename("Gastric Cancer", "2.2026") == "NCCN_GastricCancer_2026.V2_EN.pdf"
+
+
+def test_format_pdf_filename_multi_word():
+    assert format_pdf_filename("Non-Small Cell Lung Cancer", "5.2026") == "NCCN_NonSmallCellLungCancer_2026.V5_EN.pdf"
+
+
+def test_format_pdf_filename_colon():
+    assert format_pdf_filename("Melanoma: Uveal", "2.2026") == "NCCN_MelanomaUveal_2026.V2_EN.pdf"
+
+
+def test_format_pdf_filename_slash():
+    result = format_pdf_filename("Ovarian Cancer/Fallopian Tube Cancer/Primary Peritoneal Cancer", "2.2026")
+    assert result == "NCCN_OvarianCancerFallopianTubeCancerPrimaryPeritonealCancer_2026.V2_EN.pdf"
+
+
+def test_format_pdf_filename_hyphen():
+    assert format_pdf_filename("B-Cell Lymphomas", "3.2026") == "NCCN_BCellLymphomas_2026.V3_EN.pdf"
+
+
+def test_format_pdf_filename_parentheses():
+    result = format_pdf_filename("Wilms Tumor (Nephroblastoma)", "2.2025")
+    assert result == "NCCN_WilmsTumorNephroblastoma_2025.V2_EN.pdf"

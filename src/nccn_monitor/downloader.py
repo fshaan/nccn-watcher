@@ -167,20 +167,39 @@ class NCCNDownloader:
         pdf_url: str,
         slug: str,
         version: str,
+        name: str = "",
         archive_dir: str | Path = "~/.nccn-monitor/archive",
+        filename: str = "",
     ) -> Path | None:
         """Download a PDF and store it in the versioned archive.
 
         Archive structure:
-            archive/{slug}/v{version}/guideline.pdf
+            archive/{slug}/v{version}/NCCN_<CamelCase>_<Year>.V<Num>_EN.pdf
             archive/{slug}/v{version}/meta.json
+
+        Args:
+            pdf_url: URL to download.
+            slug: Filesystem-safe guideline identifier.
+            version: Version string like "2.2026".
+            name: Full guideline name (for generating filename).
+            archive_dir: Root archive directory.
+            filename: Override filename. If empty, auto-generated from name+version.
 
         Returns the archived PDF path on success, None on failure.
         """
-        archive_path = Path(archive_dir).expanduser() / slug / f"v{version}"
-        pdf_path = archive_path / "guideline.pdf"
+        from .scraper import format_pdf_filename
 
-        # Already archived?
+        archive_path = Path(archive_dir).expanduser() / slug / f"v{version}"
+
+        # Determine filename
+        if not filename and name:
+            filename = format_pdf_filename(name, version)
+        elif not filename:
+            filename = "guideline.pdf"
+
+        pdf_path = archive_path / filename
+
+        # Already archived? Check for any PDF in this version dir
         if pdf_path.exists() and pdf_path.stat().st_size > 0:
             logger.info("Already archived: %s v%s", slug, version)
             return pdf_path
@@ -191,7 +210,7 @@ class NCCNDownloader:
         if not downloaded:
             return None
 
-        # Move to archive
+        # Move to archive with standardized filename
         archive_path.mkdir(parents=True, exist_ok=True)
         shutil.move(str(downloaded), str(pdf_path))
 
@@ -199,6 +218,8 @@ class NCCNDownloader:
         meta = {
             "version": version,
             "slug": slug,
+            "name": name,
+            "filename": filename,
             "pdf_url": pdf_url,
             "downloaded_at": datetime.now(timezone.utc).isoformat(),
             "size_bytes": pdf_path.stat().st_size,
@@ -207,7 +228,7 @@ class NCCNDownloader:
         with open(meta_path, "w") as f:
             json.dump(meta, f, indent=2)
 
-        logger.info("Archived: %s v%s (%d bytes)", slug, version, meta["size_bytes"])
+        logger.info("Archived: %s → %s (%d bytes)", filename, archive_path, meta["size_bytes"])
         return pdf_path
 
     async def __aenter__(self):
@@ -236,17 +257,27 @@ def get_archived_versions(
         if not version_dir.is_dir() or version_dir.name.startswith("."):
             continue
         meta_path = version_dir / "meta.json"
-        pdf_path = version_dir / "guideline.pdf"
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = json.load(f)
-            meta["pdf_path"] = str(pdf_path)
+            # Find the actual PDF file (could be renamed)
+            pdf_file = meta.get("filename", "guideline.pdf")
+            actual_path = version_dir / pdf_file
+            if not actual_path.exists():
+                # Fallback: find any .pdf in the directory
+                pdfs = list(version_dir.glob("*.pdf"))
+                actual_path = pdfs[0] if pdfs else version_dir / "guideline.pdf"
+            meta["pdf_path"] = str(actual_path)
             versions.append(meta)
-        elif pdf_path.exists():
-            versions.append({
-                "version": version_dir.name.lstrip("v"),
-                "pdf_path": str(pdf_path),
-                "size_bytes": pdf_path.stat().st_size,
-            })
+        else:
+            # No meta.json — find any PDF
+            pdfs = list(version_dir.glob("*.pdf"))
+            if pdfs:
+                versions.append({
+                    "version": version_dir.name.lstrip("v"),
+                    "pdf_path": str(pdfs[0]),
+                    "filename": pdfs[0].name,
+                    "size_bytes": pdfs[0].stat().st_size,
+                })
 
     return versions

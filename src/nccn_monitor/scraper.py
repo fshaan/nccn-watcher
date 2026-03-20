@@ -239,6 +239,33 @@ def slugify(name: str) -> str:
     return slug
 
 
+def format_pdf_filename(name: str, version: str, lang: str = "EN") -> str:
+    """Generate standardized PDF filename.
+
+    Format: NCCN_<CamelCase>_<Year>.V<Num>_<Lang>.pdf
+
+    Examples:
+        ("Gastric Cancer", "2.2026") → "NCCN_GastricCancer_2026.V2_EN.pdf"
+        ("Non-Small Cell Lung Cancer", "5.2026") → "NCCN_NonSmallCellLungCancer_2026.V5_EN.pdf"
+        ("Melanoma: Uveal", "2.2026") → "NCCN_MelanomaUveal_2026.V2_EN.pdf"
+        ("B-Cell Lymphomas", "3.2026") → "NCCN_BCellLymphomas_2026.V3_EN.pdf"
+    """
+    # CamelCase: split on spaces, hyphens, and special chars, capitalize each word
+    clean = re.sub(r"[/:()]+", " ", name)       # Special chars → space
+    clean = re.sub(r"[^\w\s-]", "", clean)      # Remove non-alphanumeric except hyphen
+    words = re.split(r"[\s\-]+", clean)          # Split on spaces AND hyphens
+    camel = "".join(w.capitalize() for w in words if w)
+
+    # Parse version "X.YYYY" → year=YYYY, num=X
+    parts = version.split(".")
+    if len(parts) == 2:
+        ver_num, year = parts[0], parts[1]
+    else:
+        ver_num, year = version, "0000"
+
+    return f"NCCN_{camel}_{year}.V{ver_num}_{lang}.pdf"
+
+
 @dataclass
 class PdfIndexEntry:
     """A guideline's PDF URL discovered from its detail page."""
