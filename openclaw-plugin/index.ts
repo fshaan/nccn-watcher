@@ -18,48 +18,37 @@ import {
   createBrowseGuidelinesTool,
 } from "./src/tools.js";
 
-// Default paths — can be overridden via plugin config
-const DEFAULT_PROJECT_DIR = join(process.env.HOME ?? "", "Workspace/Claude/nccn_monitor");
+// Default paths — can be overridden via plugin config in openclaw.json
+const DEFAULT_PROJECT_DIR = join(process.env.HOME ?? "", "Workspace/Claude/nccn_watcher");
 const DEFAULT_PYTHON_PATH = join(DEFAULT_PROJECT_DIR, ".venv/bin/python");
 
 const nccnMonitorPlugin = {
-  config: {
-    defaults: {
-      enabled: true,
-      pythonPath: DEFAULT_PYTHON_PATH,
-      projectDir: DEFAULT_PROJECT_DIR,
-    },
-    parse(raw: Record<string, unknown>) {
-      return {
-        enabled: raw.enabled !== false,
-        pythonPath: (raw.pythonPath as string) || DEFAULT_PYTHON_PATH,
-        projectDir: (raw.projectDir as string) || DEFAULT_PROJECT_DIR,
-      };
-    },
-  },
+  id: "nccn-monitor",
+  name: "NCCN Monitor",
+  description: "Monitor NCCN clinical guideline updates",
 
   register(api: OpenClawPluginApi) {
-    const config = api.getConfig() as {
-      enabled: boolean;
-      pythonPath: string;
-      projectDir: string;
-    };
+    // Read config from api.pluginConfig (set in openclaw.json plugins.entries)
+    const pluginCfg = api.pluginConfig ?? {};
+    const enabled = pluginCfg.enabled !== false;
+    const pythonPath = (pluginCfg.pythonPath as string) || DEFAULT_PYTHON_PATH;
+    const projectDir = (pluginCfg.projectDir as string) || DEFAULT_PROJECT_DIR;
 
-    if (!config.enabled) {
+    if (!enabled) {
       api.logger.info("[nccn-monitor] Plugin disabled");
       return;
     }
 
     // Validate paths
-    if (!existsSync(config.pythonPath)) {
+    if (!existsSync(pythonPath)) {
       api.logger.warn(
-        `[nccn-monitor] Python not found at ${config.pythonPath}. ` +
-          `Run: cd ${config.projectDir} && uv venv .venv && uv pip install -e .`,
+        `[nccn-monitor] Python not found at ${pythonPath}. ` +
+          `Run: cd ${projectDir} && uv venv .venv && uv pip install -e .`,
       );
       return;
     }
 
-    const bridge = new McpBridge(config.pythonPath, config.projectDir);
+    const bridge = new McpBridge(pythonPath, projectDir);
 
     // Register all 6 tools
     api.registerTool(() => createCheckUpdatesTool(bridge));
@@ -70,7 +59,7 @@ const nccnMonitorPlugin = {
     api.registerTool(() => createBrowseGuidelinesTool(bridge));
 
     api.logger.info(
-      `[nccn-monitor] Registered 6 tools (python=${config.pythonPath}, project=${config.projectDir})`,
+      `[nccn-monitor] Registered 6 tools (python=${pythonPath}, project=${projectDir})`,
     );
   },
 };
