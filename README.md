@@ -94,13 +94,17 @@ Then add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
 {
   "nccn-monitor": {
     "enabled": true,
-    "pythonPath": "/path/to/nccn-monitor/.venv/bin/python",
-    "projectDir": "/path/to/nccn-monitor"
+    "config": {
+      "pythonPath": "/path/to/nccn-monitor/.venv/bin/python",
+      "projectDir": "/path/to/nccn-monitor"
+    }
   }
 }
 ```
 
-After `openclaw gateway restart`, 6 tools (`nccn_check_updates`, `nccn_get_status`, etc.) appear natively in OpenClaw.
+After `openclaw gateway restart`, 8 tools (`nccn_check_updates`, `nccn_get_status`, etc.) appear natively in OpenClaw.
+
+> **Note:** Only keys declared in `openclaw.plugin.json` configSchema are allowed in the plugin config. Settings like `archive_dir` go in the project's `config.yaml`, not in `openclaw.json`.
 
 ### Via mcporter (alternative)
 
